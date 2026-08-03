@@ -1,0 +1,15 @@
+// Firebase web configuration is public by design.
+// Security comes from Firebase Authentication and authorized-domain rules.
+export const firebaseConfig = {
+  apiKey: "PASTE_FIREBASE_API_KEY",
+  authDomain: "PASTE_PROJECT_ID.firebaseapp.com",
+  projectId: "PASTE_PROJECT_ID",
+  storageBucket: "PASTE_PROJECT_ID.appspot.com",
+  messagingSenderId: "PASTE_MESSAGING_SENDER_ID",
+  appId: "PASTE_FIREBASE_APP_ID"
+};
+
+// Only these signed-in emails may access the dashboard.
+export const allowedEmails = [
+  "bilalsmirza123@gmail.com"
+];
