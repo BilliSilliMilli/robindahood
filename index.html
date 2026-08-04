@@ -219,7 +219,6 @@ async function fetchLiveQuotes({manual=false}={}){
       render();
     }
 
-    // Actionable risk checks based on updated market prices
     for(const pos of S.paper){
       const ret=pos.cost?((pos.price-pos.cost)/pos.cost*100):0;
       const alertKey=`${pos.ticker}:${Math.floor(ret)}`;
@@ -248,7 +247,6 @@ async function fetchLiveQuotes({manual=false}={}){
     agentTaskTime.textContent=new Date().toLocaleString();
   }
 }
-
 
 function currentPaperCash(){
   const cost=S.paper.reduce((sum,p)=>sum+(Number(p.qty)||0)*(Number(p.cost)||0),0);
@@ -289,7 +287,7 @@ async function executeStarterPortfolio(quotes){
     const dollars=Math.min((Number(S.paperStart)||1000)*item.weight,available);
     if(dollars<10)continue;
     const qty=Number((dollars/price).toFixed(6));
-    const fillPrice=Number((price*1.0005).toFixed(4)); // 5 bps simulated slippage
+    const fillPrice=Number((price*1.0005).toFixed(4));
     const value=qty*fillPrice;
 
     log('signal',`BUY signal: ${item.ticker}`,
@@ -415,7 +413,7 @@ review.onclick=async()=>{
   agentTask.textContent='Waiting for next live quote refresh';
   agentTaskTime.textContent=new Date().toLocaleString();
 };
-addTradeEvent.onclick=()=>{const type=(prompt('Event type: scan, signal, risk, order, fill, exit, or decision')||'').trim().toLowerCase();if(!['scan','signal','risk','order','fill','exit','decision'].includes(type))return alert('Use scan, signal, risk, order, fill, exit, or decision.');const ticker=(prompt('Ticker, if applicable:')||'').trim().toUpperCase();const side=(prompt('Action, if applicable: BUY, SELL, HOLD, or NO TRADE')||'').trim().toUpperCase();const qty=Number(prompt('Quantity, if applicable:')||0);const price=Number(prompt('Price, if applicable:')||0);const reason=(prompt('Why is the agent doing this?')||'').trim();if(!reason)return;const title=ticker?`${side||type.toUpperCase()} ${ticker}`:`${type.toUpperCase()} update`;log(type,title,reason,{ticker,side,qty,price})};
+addTradeEvent.onclick=()=>{const action=(prompt('Action (BUY, SELL, TRIM, ADD):')||'').trim().toUpperCase();if(!action)return;const ticker=(prompt('Ticker:')||'').trim().toUpperCase(),qty=Number(prompt('Quantity:')||0),price=Number(prompt('Price:')||0),reason=(prompt('Why was this trade taken?')||'').trim();if(!ticker||qty<=0||price<=0||!reason)return alert('Ticker, quantity, price, and reason are required.');log(action==='SELL'?'exit':'fill',`Paper ${action}: ${ticker}`,reason,{ticker,side:action,qty,price})};
 clear.onclick=()=>{if(confirm('Clear meaningful trading activity?')){S.events=[];save()}};
 
 function researchSymbols(){
@@ -485,10 +483,9 @@ function renderResearch(){
   newsEmpty.style.display=S.news.length?'none':'block';
 }
 
-window.render=()=>{const l=sums(S.live),p=sums(S.paper),paperCash=Math.max(0,S.paperStart-p.cost),paperTotal=p.value+paperCash+S.paperRealized,liveTotal=l.pl+S.liveRealized,paperTotalPnL=p.pl+S.paperRealized;const set=(id,v)=>document.getElementById(id).textContent=v;
-set('liveValue',money(l.value));set('liveCost',money(l.cost));set('liveUnrealized',money(l.pl));set('liveRealizedValue',money(S.liveRealized));set('liveTotalPnL',money(liveTotal));set('paperValue',money(paperTotal));set('paperCash',money(paperCash));set('paperUnrealized',money(p.pl));set('paperRealizedValue',money(S.paperRealized));set('paperCost',money(p.cost));set('paperMarket',money(p.value));set('paperTotalPnL',money(paperTotalPnL));liveRealized.value=S.liveRealized;paperRealized.value=S.paperRealized;paperStart.value=S.paperStart;
-const rows=(arr,type)=>arr.map((x,i)=>{const c=x.qty*x.cost,v=x.qty*x.price,pl=v-c,r=c?pl/c*100:0;return`<tr><td><b>${x.ticker}</b></td><td>${x.qty}</td><td>${money(x.cost)}</td><td>${money(x.price)}</td><td>${money(v)}</td><td class="${pl>=0?'good':'bad'}">${money(pl)}</td><td class="${r>=0?'good':'bad'}">${pct(r)}</td><td><button class="danger" onclick="removePosition('${type}',${i})">Remove</button></td></tr>`}).join('');
-liveRows.innerHTML=rows(S.live,'live');paperRows.innerHTML=rows(S.paper,'paper');liveEmpty.style.display=S.live.length?'none':'block';paperEmpty.style.display=S.paper.length?'none':'block';
+window.render=()=>{const l=sums(S.live),p=sums(S.paper),pc=Math.max(0,S.paperStart-p.cost),pt=pc+p.value;
+const set=(id,v)=>document.getElementById(id).textContent=v;set('liveValue',money(l.value));set('liveCost',money(l.cost));set('liveUnrealized',money(l.pl));set('liveRealizedValue',money(S.liveRealized));set('liveTotalPnL',money(l.pl+S.liveRealized));set('paperValue',money(pt));set('paperCash',money(pc));set('paperUnrealized',money(p.pl));set('paperRealizedValue',money(S.paperRealized));set('paperCost',money(p.cost));set('paperMarket',money(p.value));set('paperTotalPnL',money(p.pl+S.paperRealized));liveRealized.value=S.liveRealized;paperRealized.value=S.paperRealized;paperStart.value=S.paperStart;
+[['live',S.live],['paper',S.paper]].forEach(([t,a])=>{document.getElementById(t+'Rows').innerHTML=a.map((x,i)=>{const v=x.qty*x.price,pl=v-x.qty*x.cost,r=x.cost?(x.price-x.cost)/x.cost*100:0;return `<tr><td><b>${x.ticker}</b></td><td>${x.qty}</td><td>${money(x.cost)}</td><td>${money(x.price)}</td><td>${money(v)}</td><td class="${pl>=0?'good':'bad'}">${money(pl)}</td><td class="${r>=0?'good':'bad'}">${pct(r)}</td><td><button onclick="removePosition('${t}',${i})">Remove</button></td></tr>`}).join('');document.getElementById(t+'Empty').style.display=a.length?'none':'block'});
 marketDataUrl.value=S.marketDataUrl||'';
 if(S.marketDataUrl && marketStatus.textContent==='Not configured'){
   marketStatus.textContent='Configured — testing connection';
