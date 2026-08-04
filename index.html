@@ -501,6 +501,7 @@ if(S.paperEngine?.enabled){
 set('tradesToday',S.events.filter(e=>['fill','exit'].includes(e.type)&&new Date(e.ts).toDateString()===new Date().toDateString()).length);set('riskCount',S.events.filter(e=>e.type==='risk').length);
 feed.innerHTML=S.events.map(e=>`<div class="event"><div class="eventHead"><div><span class="eventType ${e.type}">${e.type.toUpperCase()}</span> <b>${e.title}</b></div><span class="muted">${e.time}</span></div><div class="reason">${e.reason}</div><div class="meta">${e.ticker?`<span class="chip">${e.ticker}</span>`:''}${e.side?`<span class="chip">${e.side}</span>`:''}${e.qty?`<span class="chip">Qty ${e.qty}</span>`:''}${e.price?`<span class="chip">${money(e.price)}</span>`:''}</div></div>`).join('');
 feedEmpty.style.display=S.events.length?'none':'block';
+renderResearch();
 };
 </script>
 </body>
