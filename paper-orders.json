@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "orders": [
+    {
+      "id": "paper-20260810-brkb-invest-remaining",
+      "createdAt": "2026-08-10T21:07:00.000Z",
+      "side": "BUY",
+      "ticker": "BRK.B",
+      "useRemainingCash": true,
+      "slippageBps": 5,
+      "fallbackPrice": 529.68,
+      "reason": "Invest the remaining paper cash into Berkshire Hathaway Class B for diversification away from the portfolio's existing technology concentration."
+    }
+  ]
+}
