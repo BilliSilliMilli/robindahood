@@ -159,3 +159,155 @@ function renderResearch() {
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installResearchStream);
 else installResearchStream();
+
+// Paper-order synchronization bridge.
+// ChatGPT can queue paper orders in paper-orders.json through the connected GitHub repo.
+// The signed-in dashboard applies each order once to the same localStorage portfolio state used by index.html.
+const PAPER_STATE_KEY = "robindahoodMeaningfulV2";
+const PAPER_APPLIED_KEY = "robindahoodAppliedPaperOrdersV1";
+let paperSyncInFlight = false;
+
+const loadPaperState = () => {
+  try { return JSON.parse(localStorage.getItem(PAPER_STATE_KEY) || "null"); }
+  catch { return null; }
+};
+const loadAppliedPaperOrders = () => {
+  try { return new Set(JSON.parse(localStorage.getItem(PAPER_APPLIED_KEY) || "[]")); }
+  catch { return new Set(); }
+};
+const saveAppliedPaperOrders = set => localStorage.setItem(PAPER_APPLIED_KEY, JSON.stringify([...set].slice(-500)));
+const paperMoney = n => new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}).format(Number(n)||0);
+const normalizePaperUrl = value => String(value || "").trim().replace(/\/+$/, "");
+
+function paperCashFromState(state) {
+  const openCost = (state.paper || []).reduce((sum, p) => sum + (Number(p.qty)||0) * (Number(p.cost)||0), 0);
+  return Math.max(0, (Number(state.paperStart)||0) - openCost + (Number(state.paperRealized)||0));
+}
+
+async function getPaperFillPrice(state, order) {
+  const base = normalizePaperUrl(state.marketDataUrl);
+  if (base) {
+    try {
+      const response = await fetch(`${base}/quotes?symbols=${encodeURIComponent(order.ticker)}`, {cache:"no-store"});
+      const data = await response.json();
+      const quote = Array.isArray(data.quotes) ? data.quotes.find(q => q.symbol === order.ticker) : null;
+      const marketPrice = Number(quote?.askPrice || quote?.midpoint || quote?.bidPrice);
+      if (response.ok && Number.isFinite(marketPrice) && marketPrice > 0) {
+        const bps = Number(order.slippageBps ?? 5);
+        return Number((marketPrice * (1 + bps / 10000)).toFixed(4));
+      }
+    } catch {}
+  }
+  const fallback = Number(order.fallbackPrice);
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : null;
+}
+
+function appendPaperEvent(state, type, title, reason, data={}) {
+  state.events = Array.isArray(state.events) ? state.events : [];
+  state.events.unshift({time:new Date().toLocaleString(),ts:Date.now(),type,title,reason,...data});
+  state.events = state.events.slice(0,250);
+}
+
+async function applyPaperOrder(state, order) {
+  const side = String(order.side || "").toUpperCase();
+  const ticker = String(order.ticker || "").trim().toUpperCase();
+  if (!ticker || !["BUY","ADD","SELL","TRIM"].includes(side)) throw new Error("Invalid paper order");
+
+  state.paper = Array.isArray(state.paper) ? state.paper : [];
+  state.closedTrades = Array.isArray(state.closedTrades) ? state.closedTrades : [];
+  state.paperRealized = Number(state.paperRealized)||0;
+  state.paperEngine = state.paperEngine || {enabled:false,startedAt:null,tradesToday:0,lastTradeDate:null};
+
+  if (side === "BUY" || side === "ADD") {
+    const fillPrice = await getPaperFillPrice(state, {...order,ticker});
+    if (!fillPrice) throw new Error(`No valid fill price for ${ticker}`);
+    const availableCash = paperCashFromState(state);
+    const requestedDollars = order.useRemainingCash ? availableCash : Number(order.dollars);
+    const dollars = Math.min(availableCash, Number(requestedDollars));
+    if (!Number.isFinite(dollars) || dollars < 0.01) return false;
+    const qty = Number((dollars / fillPrice).toFixed(6));
+    if (!(qty > 0)) return false;
+    const actualCost = qty * fillPrice;
+    const existing = state.paper.find(p => String(p.ticker).toUpperCase() === ticker);
+    if (existing) {
+      const oldQty = Number(existing.qty)||0;
+      const oldCost = Number(existing.cost)||0;
+      const newQty = oldQty + qty;
+      existing.cost = ((oldQty * oldCost) + actualCost) / newQty;
+      existing.qty = newQty;
+      existing.price = fillPrice;
+      existing.marketTimestamp = new Date().toISOString();
+      existing.marketSource = "Queued paper order";
+    } else {
+      state.paper.push({
+        ticker, qty, cost:fillPrice, price:fillPrice,
+        openedAt:new Date().toISOString(), thesis:order.reason || "Queued paper trade",
+        play:order.reason || "Queued paper trade", catalyst:"", risk:"",
+        exitPlan:"Review using portfolio risk rules.", status:"HOLD",
+        marketSource:"Queued paper order", marketTimestamp:new Date().toISOString()
+      });
+    }
+    state.paperEngine.tradesToday = (Number(state.paperEngine.tradesToday)||0) + 1;
+    appendPaperEvent(state,"fill",`Paper ${side} filled: ${ticker}`,
+      `${order.reason || "Queued paper trade"} Filled ${qty} share(s) at ${paperMoney(fillPrice)} for ${paperMoney(actualCost)}.`,
+      {ticker,side,qty,price:fillPrice,orderId:order.id});
+    return true;
+  }
+
+  const posIndex = state.paper.findIndex(p => String(p.ticker).toUpperCase() === ticker);
+  if (posIndex < 0) throw new Error(`No open ${ticker} paper position`);
+  const pos = state.paper[posIndex];
+  const heldQty = Number(pos.qty)||0;
+  const requestedQty = side === "SELL" && order.all ? heldQty : Number(order.qty);
+  const qty = Math.min(heldQty, requestedQty);
+  if (!(qty > 0)) throw new Error(`Invalid sell quantity for ${ticker}`);
+  const fillPrice = await getPaperFillPrice(state, {...order,ticker}) || Number(pos.price)||Number(pos.cost);
+  const realized = (fillPrice - Number(pos.cost)) * qty;
+  state.paperRealized += realized;
+  const remaining = heldQty - qty;
+  state.closedTrades.unshift({...pos,qty,closedAt:new Date().toISOString(),exitPrice:fillPrice,realizedPnL:realized,saleReason:order.reason || `Queued paper ${side}.`});
+  if (remaining <= 0.0000005) state.paper.splice(posIndex,1);
+  else { pos.qty = remaining; pos.price = fillPrice; }
+  state.paperEngine.tradesToday = (Number(state.paperEngine.tradesToday)||0) + 1;
+  appendPaperEvent(state,"exit",`Paper ${side} filled: ${ticker}`,
+    `${order.reason || `Queued paper ${side}.`} Sold ${qty} share(s) at ${paperMoney(fillPrice)}. Realized result: ${paperMoney(realized)}.`,
+    {ticker,side,qty,price:fillPrice,orderId:order.id});
+  return true;
+}
+
+async function syncPaperOrders() {
+  if (paperSyncInFlight) return;
+  const state = loadPaperState();
+  if (!state) return;
+  paperSyncInFlight = true;
+  try {
+    const response = await fetch(`./paper-orders.json?ts=${Date.now()}`, {cache:"no-store"});
+    if (!response.ok) return;
+    const queue = await response.json();
+    const orders = Array.isArray(queue.orders) ? queue.orders : [];
+    const applied = loadAppliedPaperOrders();
+    let changed = false;
+    for (const order of orders) {
+      if (!order?.id || applied.has(order.id)) continue;
+      try {
+        const didApply = await applyPaperOrder(state, order);
+        if (didApply) changed = true;
+        applied.add(order.id);
+      } catch (error) {
+        console.error("Paper order sync failed", order?.id, error);
+      }
+    }
+    if (changed) {
+      localStorage.setItem(PAPER_STATE_KEY, JSON.stringify(state));
+      saveAppliedPaperOrders(applied);
+      location.reload();
+    } else {
+      saveAppliedPaperOrders(applied);
+    }
+  } finally {
+    paperSyncInFlight = false;
+  }
+}
+
+setTimeout(syncPaperOrders, 1500);
+setInterval(syncPaperOrders, 15000);
